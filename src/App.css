@@ -1,0 +1,22 @@
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #e2e8f0;
+    background-color: #1a1a1a;
+  }
+}
+
+.container {
+  margin: 0;
+  padding-top: 10vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
