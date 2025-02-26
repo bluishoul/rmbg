@@ -16,7 +16,7 @@ type MattingBlob = {
   image: string;
   matting: Blob | null;
   mattingImage: string | null;
-  loading: boolean;
+  status: "queued" | "processing" | "completed" | "error";
 };
 
 function App() {
@@ -29,6 +29,50 @@ function App() {
   const [saving, setSaving] = useState(false);
   const { getToken } = useToken();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const CONCURRENT_LIMIT = 10;
+
+  const processImage = async (blob: MattingBlob, index: number) => {
+    const token = getToken();
+    if (!token) return;
+
+    try {
+      setBlobs((prev) => {
+        const newBlobs = [...prev];
+        newBlobs[index].status = "processing";
+        return newBlobs;
+      });
+
+      const matting = await getImageMatting(token, blob.blob);
+
+      if (!matting) throw new Error("处理失败");
+
+      setBlobs((prev) => {
+        const newBlobs = [...prev];
+        newBlobs[index].matting = new Blob([matting], { type: "image/png" });
+        newBlobs[index].mattingImage = matting;
+        newBlobs[index].status = "completed";
+
+        const queuedImages = newBlobs.filter((b) => b.status === "queued");
+        if (queuedImages.length > 0) {
+          const nextImage = queuedImages[0];
+          const nextIndex = newBlobs.findIndex((b) => b.key === nextImage.key);
+          if (nextIndex !== -1) {
+            setTimeout(() => {
+              processImage(nextImage, nextIndex);
+            }, 0);
+          }
+        }
+
+        return newBlobs;
+      });
+    } catch (error) {
+      setBlobs((prev) => {
+        const newBlobs = [...prev];
+        newBlobs[index].status = "error";
+        return newBlobs;
+      });
+    }
+  };
 
   const handleDrop = async (files: Blob[]) => {
     const token = getToken();
@@ -36,28 +80,21 @@ function App() {
       setSettingsOpen(true);
       return;
     }
-    const mbs: MattingBlob[] = [];
-    files.forEach(async (file, i) => {
-      const blob = {
-        blob: file,
-        image: URL.createObjectURL(file),
-        loading: true,
-        matting: null,
-        mattingImage: null,
-        key: `${i}-${Date.now()}`,
-      };
-      mbs[i] = blob;
-      setBlobs(mbs);
-      const matting = await getImageMatting(token, file);
-      if (!matting) return;
-      setBlobs((prev) => {
-        const newBlobs = [...prev];
-        newBlobs[i].matting = new Blob([matting], { type: "image/png" });
-        newBlobs[i].mattingImage = matting;
-        newBlobs[i].loading = false;
-        newBlobs[i].key = `${i}-${Date.now()}`;
-        return newBlobs;
-      });
+
+    const newBlobs: MattingBlob[] = files.map((file, i) => ({
+      blob: file,
+      image: URL.createObjectURL(file),
+      loading: true,
+      matting: null,
+      mattingImage: null,
+      key: `${i}-${Date.now()}`,
+      status: i < CONCURRENT_LIMIT ? "processing" : "queued",
+    }));
+
+    setBlobs(newBlobs);
+
+    newBlobs.slice(0, CONCURRENT_LIMIT).forEach((blob, index) => {
+      processImage(blob, index);
     });
   };
 
@@ -86,12 +123,10 @@ function App() {
         const fileName = `photo-${index + 1}.png`;
         const filePath = await join(savePath, fileName);
 
-        // 移除 base64 前缀
         const base64Data = blob.mattingImage.replace(
           /^data:image\/\w+;base64,/,
           ""
         );
-        // 转换为 Uint8Array
         const uint8Array = Uint8Array.from(atob(base64Data), (c) =>
           c.charCodeAt(0)
         );
@@ -108,9 +143,42 @@ function App() {
     }
   };
 
+  const handleRetry = (index: number) => {
+    const blob = blobs[index];
+    if (blob) {
+      processImage(blob, index);
+    }
+  };
+
+  const handleGenerateTestErrors = () => {
+    const testFiles = Array.from(
+      { length: 5 },
+      (_, i) => new Blob([`test${i}`], { type: "image/png" })
+    );
+    const newBlobs: MattingBlob[] = testFiles.map((file, i) => ({
+      blob: file,
+      image: "https://picsum.photos/400/400", // 使用随机图片
+      matting: null,
+      mattingImage: null,
+      key: `test-${i}-${Date.now()}`,
+      status: "error",
+    }));
+
+    setBlobs(newBlobs);
+  };
+
   return (
     <main className="container mx-auto">
-      <div className="fixed top-4 right-4">
+      <div className="fixed top-4 right-4 flex items-center gap-2">
+        {import.meta.env.DEV && (
+          <button
+            onClick={handleGenerateTestErrors}
+            className="px-3 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2"
+            title="生成测试错误"
+          >
+            生成测试错误
+          </button>
+        )}
         <button
           onClick={() => setSettingsOpen(true)}
           className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
@@ -169,13 +237,14 @@ function App() {
       )}
 
       <div className="grid grid-cols-4 gap-4">
-        {blobs.map(({ image, mattingImage, loading, key }) => (
+        {blobs.map(({ image, mattingImage, key, status }, index) => (
           <ImageMatting
             key={key}
             image={image}
             mattingImage={mattingImage}
-            loading={loading}
+            status={status}
             onOpen={() => handleOpen(image, mattingImage)}
+            onRetry={() => handleRetry(index)}
           />
         ))}
       </div>
