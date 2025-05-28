@@ -79,7 +79,7 @@ export default function Dropzone({
       className="relative flex mb-10 h-48 cursor-pointer items-center justify-center rounded-lg border-2 border-dashed border-gray-300 hover:border-gray-400 hover:bg-gray-50 dark:border-gray-600 dark:hover:border-gray-500 dark:hover:bg-gray-800/30"
     >
       <span className="text-gray-500 dark:text-gray-400">
-        点击选择文件或文件夹
+        点击选择文件夹（暂不支持单个文件）
       </span>
     </div>
   );
