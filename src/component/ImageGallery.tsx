@@ -69,7 +69,7 @@ export default function ImageGallery({
                       <img
                         src={mattingImage}
                         alt="matting"
-                        className="absolute inset-0 w-full h-full object-contain transition-opacity duration-500 rounded-lg bg-gray-800"
+                        className="absolute inset-0 w-full h-full object-contain transition-opacity duration-500 rounded-lg checkerboard"
                         style={{ opacity: showMatting ? 1 : 0 }}
                       />
                     )}

@@ -1,21 +1,29 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import "./App.css";
-import Dropzone from "./component/Dropzone";
+import Dropzone, { FileEntry } from "./component/Dropzone";
 import ImageMatting from "./component/ImageMatting";
-import { ArrowDownTrayIcon, Cog6ToothIcon } from "@heroicons/react/24/outline";
+import {
+  ArrowDownTrayIcon,
+  Cog6ToothIcon,
+} from "@heroicons/react/24/outline";
 import ImageGallery from "./component/ImageGallery";
 import { downloadDir, join } from "@tauri-apps/api/path";
-import { mkdir, writeFile } from "@tauri-apps/plugin-fs";
+import { mkdir, writeFile, copyFile } from "@tauri-apps/plugin-fs";
 import getImageMatting from "./lib/getImageMatting";
 import useToken from "./lib/useToken";
+import useProcessingMode from "./lib/useProcessingMode";
+import { removeBackground, checkModelStatus, downloadModel } from "./lib/localMatting";
 import SettingsModal from "./component/SettingsModal";
+import { readFile } from "@tauri-apps/plugin-fs";
 
 type MattingBlob = {
   key: string;
+  filePath: string;
   blob: Blob;
   image: string;
   matting: Blob | null;
   mattingImage: string | null;
+  mattingFilePath: string | null;
   status: "queued" | "processing" | "completed" | "error";
 };
 
@@ -28,10 +36,102 @@ function App() {
   );
   const [saving, setSaving] = useState(false);
   const { getToken } = useToken();
+  const { mode } = useProcessingMode();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const CONCURRENT_LIMIT = 10;
+  const [modelReady, setModelReady] = useState(false);
+  const [modelDownloading, setModelDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadMessage, setDownloadMessage] = useState("");
 
-  const processImage = async (blob: MattingBlob, index: number) => {
+  // Auto-download model when in local mode
+  useEffect(() => {
+    if (mode !== "local") return;
+
+    let cancelled = false;
+    checkModelStatus()
+      .then((status) => {
+        if (cancelled) return;
+        if (status.downloaded) {
+          setModelReady(true);
+        } else {
+          setModelDownloading(true);
+          setDownloadMessage("正在下载模型...");
+          downloadModel((stage, percent, message) => {
+            if (cancelled) return;
+            setDownloadProgress(percent);
+            setDownloadMessage(message || stage);
+          })
+            .then(() => {
+              if (cancelled) return;
+              setModelReady(true);
+              setModelDownloading(false);
+            })
+            .catch((err) => {
+              if (cancelled) return;
+              console.error("Model download failed:", err);
+              setModelDownloading(false);
+            });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Check model status failed:", err);
+      });
+
+    return () => { cancelled = true; };
+  }, [mode]);
+
+  const CLOUD_CONCURRENT_LIMIT = 10;
+  const LOCAL_CONCURRENT_LIMIT = 3;
+  const concurrentLimit =
+    mode === "local" ? LOCAL_CONCURRENT_LIMIT : CLOUD_CONCURRENT_LIMIT;
+
+  const processImageLocal = async (blob: MattingBlob, index: number) => {
+    try {
+      setBlobs((prev) => {
+        const newBlobs = [...prev];
+        newBlobs[index].status = "processing";
+        return newBlobs;
+      });
+
+      const result = await removeBackground(blob.filePath);
+
+      // Read the result file to create a preview
+      const resultData = await readFile(result.outputPath);
+      const resultBlob = new Blob([resultData.buffer], { type: "image/png" });
+      const mattingImage = URL.createObjectURL(resultBlob);
+
+      setBlobs((prev) => {
+        const newBlobs = [...prev];
+        newBlobs[index].matting = resultBlob;
+        newBlobs[index].mattingImage = mattingImage;
+        newBlobs[index].mattingFilePath = result.outputPath;
+        newBlobs[index].status = "completed";
+
+        const queuedImages = newBlobs.filter((b) => b.status === "queued");
+        if (queuedImages.length > 0) {
+          const nextImage = queuedImages[0];
+          const nextIndex = newBlobs.findIndex((b) => b.key === nextImage.key);
+          if (nextIndex !== -1) {
+            setTimeout(() => {
+              processImageLocal(nextImage, nextIndex);
+            }, 0);
+          }
+        }
+
+        return newBlobs;
+      });
+    } catch (error) {
+      console.error("Local processing error:", error);
+      setBlobs((prev) => {
+        const newBlobs = [...prev];
+        newBlobs[index].status = "error";
+        return newBlobs;
+      });
+    }
+  };
+
+  const processImageCloud = async (blob: MattingBlob, index: number) => {
     const token = getToken();
     if (!token) return;
 
@@ -58,7 +158,7 @@ function App() {
           const nextIndex = newBlobs.findIndex((b) => b.key === nextImage.key);
           if (nextIndex !== -1) {
             setTimeout(() => {
-              processImage(nextImage, nextIndex);
+              processImageCloud(nextImage, nextIndex);
             }, 0);
           }
         }
@@ -74,26 +174,41 @@ function App() {
     }
   };
 
-  const handleDrop = async (files: Blob[]) => {
-    const token = getToken();
-    if (!token) {
-      setSettingsOpen(true);
+  const processImage = (blob: MattingBlob, index: number) => {
+    if (mode === "local") {
+      processImageLocal(blob, index);
+    } else {
+      processImageCloud(blob, index);
+    }
+  };
+
+  const handleDrop = async (files: FileEntry[]) => {
+    if (mode === "local" && !modelReady) {
       return;
+    }
+    if (mode === "cloud") {
+      const token = getToken();
+      if (!token) {
+        setSettingsOpen(true);
+        return;
+      }
     }
 
     const newBlobs: MattingBlob[] = files.map((file, i) => ({
-      blob: file,
-      image: URL.createObjectURL(file),
+      filePath: file.path,
+      blob: file.blob,
+      image: file.previewUrl,
       loading: true,
       matting: null,
       mattingImage: null,
+      mattingFilePath: null,
       key: `${i}-${Date.now()}`,
-      status: i < CONCURRENT_LIMIT ? "processing" : "queued",
+      status: (i < concurrentLimit ? "processing" : "queued") as MattingBlob["status"],
     }));
 
     setBlobs(newBlobs);
 
-    newBlobs.slice(0, CONCURRENT_LIMIT).forEach((blob, index) => {
+    newBlobs.slice(0, concurrentLimit).forEach((blob, index) => {
       processImage(blob, index);
     });
   };
@@ -118,10 +233,17 @@ function App() {
       await mkdir(savePath, { recursive: true });
 
       const savePromises = blobs.map(async (blob, index) => {
-        if (!blob.mattingImage) return;
-
         const fileName = `photo-${index + 1}.png`;
         const filePath = await join(savePath, fileName);
+
+        // Local mode: copy file directly from temp path
+        if (mode === "local" && blob.mattingFilePath) {
+          await copyFile(blob.mattingFilePath, filePath);
+          return;
+        }
+
+        // Cloud mode: decode base64 and write
+        if (!blob.mattingImage) return;
 
         const base64Data = blob.mattingImage.replace(
           /^data:image\/\w+;base64,/,
@@ -156,10 +278,12 @@ function App() {
       (_, i) => new Blob([`test${i}`], { type: "image/png" })
     );
     const newBlobs: MattingBlob[] = testFiles.map((file, i) => ({
+      filePath: "",
       blob: file,
-      image: "https://picsum.photos/400/400", // 使用随机图片
+      image: "https://picsum.photos/400/400",
       matting: null,
       mattingImage: null,
+      mattingFilePath: null,
       key: `test-${i}-${Date.now()}`,
       status: "error",
     }));
@@ -190,12 +314,37 @@ function App() {
 
       <SettingsModal isOpen={settingsOpen} setIsOpen={setSettingsOpen} />
 
+      {mode === "local" && modelDownloading && (
+        <div className="mb-6 p-4 rounded-lg bg-blue-50 dark:bg-blue-900/20">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
+              正在下载 CoreML 模型...
+            </span>
+            <span className="text-xs text-blue-500 dark:text-blue-400">
+              {downloadProgress > 0 ? `${Math.round(downloadProgress)}%` : ""}
+            </span>
+          </div>
+          <div className="w-full bg-blue-200 rounded-full h-2 dark:bg-blue-800">
+            <div
+              className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${Math.min(downloadProgress, 100)}%` }}
+            ></div>
+          </div>
+          <div className="mt-1 text-xs text-blue-500 dark:text-blue-400">
+            {downloadMessage}
+          </div>
+        </div>
+      )}
+
       <Dropzone onDrop={handleDrop} onStart={handleStart} />
 
       {blobs.length > 0 && (
         <div className="flex items-center justify-between mb-6">
           <div className="text-sm text-gray-500 dark:text-gray-400">
             共 {blobs.length} 张图片
+            <span className="ml-2 px-2 py-0.5 rounded text-xs bg-gray-100 dark:bg-gray-700">
+              {mode === "local" ? "本地 CoreML" : "云端 API"}
+            </span>
           </div>
           <button
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"

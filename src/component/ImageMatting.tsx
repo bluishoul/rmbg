@@ -66,7 +66,11 @@ export default function ImageMatting({
   };
 
   return (
-    <div className="relative aspect-square rounded-lg overflow-hidden">
+    <div
+      className={`relative aspect-square rounded-lg overflow-hidden ${
+        mattingImage ? "checkerboard" : ""
+      }`}
+    >
       <img
         src={mattingImage || image}
         alt="图片"

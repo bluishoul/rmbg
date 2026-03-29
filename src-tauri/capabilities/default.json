@@ -13,6 +13,18 @@
     "fs:allow-mkdir",
     "fs:allow-read-dir",
     "fs:allow-download-write-recursive",
-    "shell:allow-open"
+    "fs:allow-temp-read-recursive",
+    "fs:allow-temp-write-recursive",
+    "shell:allow-open",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "binaries/rmbg-sidecar",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
   ]
 }

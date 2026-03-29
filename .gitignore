@@ -26,3 +26,7 @@ dist-ssr
 # Env
 .env*
 !.env.example
+
+# Swift sidecar build artifacts
+src-tauri/sidecar/.build/
+src-tauri/binaries/
