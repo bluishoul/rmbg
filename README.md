@@ -1,6 +1,6 @@
 # RMBG - AI Image Background Removal Tool
 
-A desktop application for removing image backgrounds using [Gitee AI Serverless API - RMBG-2.0](https://ai.gitee.com/serverless-api?model=RMBG-2.0), built with Tauri and React.
+A desktop application for removing image backgrounds using local model on Apple Silicon by default, [RMBG-2.0 API](https://ai.gitee.com/serverless-api?model=RMBG-2.0) for backup, built with Tauri and React.
 
 ## Features
 
@@ -9,7 +9,6 @@ A desktop application for removing image backgrounds using [Gitee AI Serverless 
 - Real-time preview
 - Dark mode support
 - Save to downloads folder
-- Using local model on Apple Silicon by default, api for backup.
 
 # Screenshots
 
@@ -26,7 +25,7 @@ A desktop application for removing image backgrounds using [Gitee AI Serverless 
 - TailwindCSS - Styling framework
 - Headless UI - UI components
 - Heroicons - Icon set
-- Gitee AI Serverless API - [RMBG-2.0](https://ai.gitee.com/serverless-api?model=RMBG-2.0) model
+- RMBG-2.0 API - [RMBG-2.0](https://ai.gitee.com/serverless-api?model=RMBG-2.0) model
 
 ## Development Requirements
 

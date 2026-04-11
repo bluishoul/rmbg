@@ -1,6 +1,6 @@
 # RMBG - AI 图像背景移除工具
 
-一个桌面应用程序，使用 [Gitee AI Serverless API - RMBG-2.0](https://ai.gitee.com/serverless-api?model=RMBG-2.0) 实现图像背景移除，基于 Tauri 和 React 构建。
+一个桌面应用程序，支持在 Apple Silicon 芯片下优先使用本地模型，[RMBG-2.0 API](https://ai.gitee.com/serverless-api?model=RMBG-2.0) 作为替补，实现图像背景移除，基于 Tauri 和 React 构建。
 
 ## 功能特性
 
@@ -9,7 +9,6 @@
 - 实时预览
 - 支持深色模式
 - 保存到下载文件夹
-- macOS 下支持 Apple Silicon 芯片使用本地模型扣图，其他设备支持支持 API 扣图
 
 # 截图
 
@@ -25,7 +24,7 @@
 - TailwindCSS - 样式框架
 - Headless UI - UI 组件库
 - Heroicons - 图标集
-- Gitee AI Serverless API - [RMBG-2.0](https://ai.gitee.com/serverless-api?model=RMBG-2.0) 模型
+- RMBG-2.0 API - [RMBG-2.0](https://ai.gitee.com/serverless-api?model=RMBG-2.0) 模型
 
 ## 开发环境要求
 
