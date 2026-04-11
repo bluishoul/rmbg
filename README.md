@@ -10,7 +10,7 @@ A desktop application for removing image backgrounds using local model on Apple 
 - Dark mode support
 - Save to downloads folder
 
-# Screenshots
+## Screenshots
 
 | Batch     | Local Model Support | API Support |
 |    :----:  |    :----:  |    :----:  |
