@@ -2,14 +2,21 @@ interface Props {
   image: string;
   mattingImage: string | null;
   status: "queued" | "processing" | "completed" | "error";
+  processingTime: number | null;
   onOpen: () => void;
   onRetry: () => void;
+}
+
+function formatTime(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 export default function ImageMatting({
   image,
   mattingImage,
   status,
+  processingTime,
   onOpen,
   onRetry,
 }: Props) {
@@ -24,26 +31,28 @@ export default function ImageMatting({
       case "processing":
         return (
           <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
-            <svg
-              className="w-8 h-8 animate-spin text-white"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              ></circle>
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-              ></path>
-            </svg>
+            <div className="w-8 h-8 animate-spin">
+              <svg
+                className="w-full h-full text-white"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                ></circle>
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                ></path>
+              </svg>
+            </div>
           </div>
         );
       case "error":
@@ -74,10 +83,15 @@ export default function ImageMatting({
       <img
         src={mattingImage || image}
         alt="图片"
-        className="w-full h-full object-cover cursor-pointer"
+        className="w-full h-full object-contain cursor-pointer"
         onClick={onOpen}
       />
       {getStatusDisplay()}
+      {status === "completed" && processingTime !== null && (
+        <span className="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium text-white/80 bg-black/40 backdrop-blur-sm rounded">
+          {formatTime(processingTime)}
+        </span>
+      )}
     </div>
   );
 }

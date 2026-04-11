@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import "./App.css";
-import Dropzone, { FileEntry } from "./component/Dropzone";
+import ImagePicker, { FileEntry } from "./component/ImagePicker";
 import ImageMatting from "./component/ImageMatting";
 import {
   ArrowDownTrayIcon,
@@ -25,6 +25,8 @@ type MattingBlob = {
   mattingImage: string | null;
   mattingFilePath: string | null;
   status: "queued" | "processing" | "completed" | "error";
+  startedAt: number | null;
+  processingTime: number | null; // milliseconds
 };
 
 function App() {
@@ -87,10 +89,12 @@ function App() {
     mode === "local" ? LOCAL_CONCURRENT_LIMIT : CLOUD_CONCURRENT_LIMIT;
 
   const processImageLocal = async (blob: MattingBlob, index: number) => {
+    const startedAt = Date.now();
     try {
       setBlobs((prev) => {
         const newBlobs = [...prev];
         newBlobs[index].status = "processing";
+        newBlobs[index].startedAt = startedAt;
         return newBlobs;
       });
 
@@ -107,6 +111,7 @@ function App() {
         newBlobs[index].mattingImage = mattingImage;
         newBlobs[index].mattingFilePath = result.outputPath;
         newBlobs[index].status = "completed";
+        newBlobs[index].processingTime = Date.now() - startedAt;
 
         const queuedImages = newBlobs.filter((b) => b.status === "queued");
         if (queuedImages.length > 0) {
@@ -135,10 +140,12 @@ function App() {
     const token = getToken();
     if (!token) return;
 
+    const startedAt = Date.now();
     try {
       setBlobs((prev) => {
         const newBlobs = [...prev];
         newBlobs[index].status = "processing";
+        newBlobs[index].startedAt = startedAt;
         return newBlobs;
       });
 
@@ -151,6 +158,7 @@ function App() {
         newBlobs[index].matting = new Blob([matting], { type: "image/png" });
         newBlobs[index].mattingImage = matting;
         newBlobs[index].status = "completed";
+        newBlobs[index].processingTime = Date.now() - startedAt;
 
         const queuedImages = newBlobs.filter((b) => b.status === "queued");
         if (queuedImages.length > 0) {
@@ -182,7 +190,7 @@ function App() {
     }
   };
 
-  const handleDrop = async (files: FileEntry[]) => {
+  const handleSelect = async (files: FileEntry[]) => {
     if (mode === "local" && !modelReady) {
       return;
     }
@@ -204,6 +212,8 @@ function App() {
       mattingFilePath: null,
       key: `${i}-${Date.now()}`,
       status: (i < concurrentLimit ? "processing" : "queued") as MattingBlob["status"],
+      startedAt: null,
+      processingTime: null,
     }));
 
     setBlobs(newBlobs);
@@ -213,14 +223,21 @@ function App() {
     });
   };
 
-  const handleStart = () => {
+  const handleReset = () => {
     setSaving(false);
     setBlobs([]);
   };
 
-  const handleOpen = (originImage: string, mattingImage: string | null) => {
+  const [currentIndex, setCurrentIndex] = useState(-1);
+
+  const handleOpen = (
+    originImage: string,
+    mattingImage: string | null,
+    index: number
+  ) => {
     setCurrentOriginImage(originImage);
     setCurrentMattingImage(mattingImage);
+    setCurrentIndex(index);
     setIsOpen(true);
   };
 
@@ -272,6 +289,255 @@ function App() {
     }
   };
 
+  const loadImage = (src: string): Promise<HTMLImageElement> =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+
+  // Compositing lock: sidecar calls run in parallel, but compositing onto the
+  // matting canvas must be serialised so results don't overwrite each other.
+  const compositeLockRef = useRef<Promise<void>>(Promise.resolve());
+  // Always holds the latest matting URL (updated synchronously inside the lock).
+  const mattingUrlRef = useRef<string | null>(null);
+
+  // Reset refs when the viewed image changes
+  useEffect(() => {
+    mattingUrlRef.current = currentMattingImage;
+    compositeLockRef.current = Promise.resolve();
+  }, [currentIndex, currentMattingImage]);
+
+  const applyComposite = (
+    compositeWork: (mattingUrl: string) => Promise<{ url: string; blob: Blob }>
+  ): Promise<void> => {
+    const p = compositeLockRef.current.then(async () => {
+      const url = mattingUrlRef.current;
+      if (!url) return;
+      const { url: newUrl, blob } = await compositeWork(url);
+      mattingUrlRef.current = newUrl;
+      setBlobs((prev) => {
+        const newBlobs = [...prev];
+        if (newBlobs[currentIndex]) {
+          newBlobs[currentIndex].mattingImage = newUrl;
+          newBlobs[currentIndex].matting = blob;
+          newBlobs[currentIndex].mattingFilePath = null;
+        }
+        return newBlobs;
+      });
+      setCurrentMattingImage(newUrl);
+    });
+    compositeLockRef.current = p;
+    return p;
+  };
+
+  const handleFixRegion = async (
+    region: { x: number; y: number; width: number; height: number; rotation: number },
+    _imageWidth: number,
+    _imageHeight: number
+  ) => {
+    if (currentIndex < 0) return;
+    const blob = blobs[currentIndex];
+    if (!blob || !blob.mattingImage) return;
+
+    // --- Step 1: Crop & sidecar (runs in parallel with other fix regions) ---
+    const originalImg = await loadImage(blob.image);
+    const natW = originalImg.naturalWidth;
+    const natH = originalImg.naturalHeight;
+
+    const rx = Math.round((region.x / 100) * natW);
+    const ry = Math.round((region.y / 100) * natH);
+    const rw = Math.round((region.width / 100) * natW);
+    const rh = Math.round((region.height / 100) * natH);
+
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = rw;
+    cropCanvas.height = rh;
+    const cropCtx = cropCanvas.getContext("2d")!;
+
+    if (region.rotation !== 0) {
+      cropCtx.translate(rw / 2, rh / 2);
+      cropCtx.rotate((-region.rotation * Math.PI) / 180);
+      cropCtx.translate(-rw / 2, -rh / 2);
+    }
+    cropCtx.drawImage(originalImg, rx, ry, rw, rh, 0, 0, rw, rh);
+
+    const cropBlob = await new Promise<Blob>((resolve) =>
+      cropCanvas.toBlob((b) => resolve(b!), "image/png")
+    );
+
+    const { tempDir: getTempDir, join: joinPath } = await import(
+      "@tauri-apps/api/path"
+    );
+    const { writeFile: tauriWriteFile, readFile: tauriReadFile } =
+      await import("@tauri-apps/plugin-fs");
+
+    const tmpDir = await getTempDir();
+    const cropName = `rmbg-crop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.png`;
+    const cropPath = await joinPath(tmpDir, cropName);
+    const cropData = new Uint8Array(await cropBlob.arrayBuffer());
+    await tauriWriteFile(cropPath, cropData);
+
+    const result = await removeBackground(cropPath);
+
+    const resultData = await tauriReadFile(result.outputPath);
+    const resultBlob = new Blob([resultData.buffer], { type: "image/png" });
+    const resultImg = await loadImage(URL.createObjectURL(resultBlob));
+
+    // --- Step 2: Composite (serialised via lock) ---
+    await applyComposite(async (currentMattingUrl) => {
+      const mattingImg = await loadImage(currentMattingUrl);
+
+      const compositeCanvas = document.createElement("canvas");
+      compositeCanvas.width = natW;
+      compositeCanvas.height = natH;
+      const compCtx = compositeCanvas.getContext("2d")!;
+      compCtx.drawImage(mattingImg, 0, 0);
+
+      if (region.rotation !== 0) {
+        compCtx.save();
+        compCtx.translate(rx + rw / 2, ry + rh / 2);
+        compCtx.rotate((region.rotation * Math.PI) / 180);
+        compCtx.drawImage(resultImg, -rw / 2, -rh / 2, rw, rh);
+        compCtx.restore();
+      } else {
+        compCtx.drawImage(resultImg, rx, ry, rw, rh);
+      }
+
+      const finalUrl = compositeCanvas.toDataURL("image/png");
+      const finalBlob = await (await fetch(finalUrl)).blob();
+      return { url: URL.createObjectURL(finalBlob), blob: finalBlob };
+    });
+  };
+
+  const handleEraseRegion = async (
+    region: { x: number; y: number; width: number; height: number; rotation: number },
+    _imageWidth: number,
+    _imageHeight: number
+  ) => {
+    if (currentIndex < 0) return;
+    const blob = blobs[currentIndex];
+    if (!blob || !blob.mattingImage) return;
+
+    // Erase 模式：先用 RMBG 在选区里抠出主体，再把抠出的主体从已有 matting 上"再扣掉一次"
+    // --- Step 1: Crop original & sidecar (并行友好) ---
+    const originalImg = await loadImage(blob.image);
+    const natW = originalImg.naturalWidth;
+    const natH = originalImg.naturalHeight;
+
+    const rx = Math.round((region.x / 100) * natW);
+    const ry = Math.round((region.y / 100) * natH);
+    const rw = Math.round((region.width / 100) * natW);
+    const rh = Math.round((region.height / 100) * natH);
+
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = rw;
+    cropCanvas.height = rh;
+    const cropCtx = cropCanvas.getContext("2d")!;
+
+    if (region.rotation !== 0) {
+      cropCtx.translate(rw / 2, rh / 2);
+      cropCtx.rotate((-region.rotation * Math.PI) / 180);
+      cropCtx.translate(-rw / 2, -rh / 2);
+    }
+    cropCtx.drawImage(originalImg, rx, ry, rw, rh, 0, 0, rw, rh);
+
+    const cropBlob = await new Promise<Blob>((resolve) =>
+      cropCanvas.toBlob((b) => resolve(b!), "image/png")
+    );
+
+    const { tempDir: getTempDir, join: joinPath } = await import(
+      "@tauri-apps/api/path"
+    );
+    const { writeFile: tauriWriteFile, readFile: tauriReadFile } =
+      await import("@tauri-apps/plugin-fs");
+
+    const tmpDir = await getTempDir();
+    const cropName = `rmbg-erase-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.png`;
+    const cropPath = await joinPath(tmpDir, cropName);
+    const cropData = new Uint8Array(await cropBlob.arrayBuffer());
+    await tauriWriteFile(cropPath, cropData);
+
+    const result = await removeBackground(cropPath);
+
+    const resultData = await tauriReadFile(result.outputPath);
+    const resultBlob = new Blob([resultData.buffer], { type: "image/png" });
+    const resultImg = await loadImage(URL.createObjectURL(resultBlob));
+
+    // --- Step 2: Composite (锁内串行) - 用抠出结果的 alpha 作为擦除蒙版 ---
+    await applyComposite(async (currentMattingUrl) => {
+      const mattingImg = await loadImage(currentMattingUrl);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = natW;
+      canvas.height = natH;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(mattingImg, 0, 0);
+
+      // destination-out: 只有 result 不透明的像素会从 matting 上被擦除
+      ctx.save();
+      ctx.globalCompositeOperation = "destination-out";
+      if (region.rotation !== 0) {
+        ctx.translate(rx + rw / 2, ry + rh / 2);
+        ctx.rotate((region.rotation * Math.PI) / 180);
+        ctx.drawImage(resultImg, -rw / 2, -rh / 2, rw, rh);
+      } else {
+        ctx.drawImage(resultImg, rx, ry, rw, rh);
+      }
+      ctx.restore();
+
+      const finalUrl = canvas.toDataURL("image/png");
+      const finalBlob = await (await fetch(finalUrl)).blob();
+      return { url: URL.createObjectURL(finalBlob), blob: finalBlob };
+    });
+  };
+
+  const handleRevertRegion = async (
+    region: { x: number; y: number; width: number; height: number; rotation: number },
+    beforeSnapshot: string,
+    _imageWidth: number,
+    _imageHeight: number
+  ) => {
+    if (currentIndex < 0) return;
+
+    const snapshotImg = await loadImage(beforeSnapshot);
+
+    await applyComposite(async (currentMattingUrl) => {
+      const mattingImg = await loadImage(currentMattingUrl);
+      const natW = mattingImg.naturalWidth;
+      const natH = mattingImg.naturalHeight;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = natW;
+      canvas.height = natH;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(mattingImg, 0, 0);
+
+      const rx = Math.round((region.x / 100) * natW);
+      const ry = Math.round((region.y / 100) * natH);
+      const rw = Math.round((region.width / 100) * natW);
+      const rh = Math.round((region.height / 100) * natH);
+
+      // Clear the region then draw the before snapshot back
+      ctx.save();
+      if (region.rotation !== 0) {
+        ctx.translate(rx + rw / 2, ry + rh / 2);
+        ctx.rotate((region.rotation * Math.PI) / 180);
+        ctx.clearRect(-rw / 2, -rh / 2, rw, rh);
+        ctx.drawImage(snapshotImg, -rw / 2, -rh / 2, rw, rh);
+      } else {
+        ctx.clearRect(rx, ry, rw, rh);
+        ctx.drawImage(snapshotImg, rx, ry, rw, rh);
+      }
+      ctx.restore();
+
+      const finalUrl = canvas.toDataURL("image/png");
+      const finalBlob = await (await fetch(finalUrl)).blob();
+      return { url: URL.createObjectURL(finalBlob), blob: finalBlob };
+    });
+  };
+
   const handleGenerateTestErrors = () => {
     const testFiles = Array.from(
       { length: 5 },
@@ -286,6 +552,8 @@ function App() {
       mattingFilePath: null,
       key: `test-${i}-${Date.now()}`,
       status: "error",
+      startedAt: null,
+      processingTime: null,
     }));
 
     setBlobs(newBlobs);
@@ -336,7 +604,7 @@ function App() {
         </div>
       )}
 
-      <Dropzone onDrop={handleDrop} onStart={handleStart} />
+      <ImagePicker onSelect={handleSelect} onReset={handleReset} />
 
       {blobs.length > 0 && (
         <div className="flex items-center justify-between mb-6">
@@ -353,26 +621,28 @@ function App() {
           >
             {saving ? (
               <>
-                <svg
-                  className="w-5 h-5 animate-spin"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  ></circle>
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  ></path>
-                </svg>
+                <div className="w-5 h-5 animate-spin">
+                  <svg
+                    className="w-full h-full"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                </div>
                 正在保存...
               </>
             ) : (
@@ -386,13 +656,14 @@ function App() {
       )}
 
       <div className="grid grid-cols-4 gap-4">
-        {blobs.map(({ image, mattingImage, key, status }, index) => (
+        {blobs.map(({ image, mattingImage, key, status, processingTime }, index) => (
           <ImageMatting
             key={key}
             image={image}
             mattingImage={mattingImage}
             status={status}
-            onOpen={() => handleOpen(image, mattingImage)}
+            processingTime={processingTime}
+            onOpen={() => handleOpen(image, mattingImage, index)}
             onRetry={() => handleRetry(index)}
           />
         ))}
@@ -402,6 +673,9 @@ function App() {
         mattingImage={currentMattingImage}
         isOpen={isOpen}
         setIsOpen={setIsOpen}
+        onFixRegion={handleFixRegion}
+        onEraseRegion={handleEraseRegion}
+        onRevertRegion={handleRevertRegion}
       />
     </main>
   );

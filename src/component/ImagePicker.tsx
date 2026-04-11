@@ -70,27 +70,27 @@ async function handleFiles(
   return result;
 }
 
-export default function Dropzone({
-  onDrop,
-  onStart,
+export default function ImagePicker({
+  onSelect,
+  onReset,
 }: {
-  onDrop: (files: FileEntry[]) => void;
-  onStart: () => void;
+  onSelect: (files: FileEntry[]) => void;
+  onReset: () => void;
 }) {
   const handleSelectFolder = async () => {
-    onStart();
+    onReset();
     const dirs = await open({
       multiple: true,
       directory: true,
     });
     if (dirs) {
       const result = await handleFiles(dirs);
-      onDrop(result);
+      onSelect(result);
     }
   };
 
   const handleSelectFiles = async () => {
-    onStart();
+    onReset();
     const files = await open({
       multiple: true,
       directory: false,
@@ -103,7 +103,7 @@ export default function Dropzone({
     });
     if (files) {
       const entries = await Promise.all(files.map(loadFileEntry));
-      onDrop(entries);
+      onSelect(entries);
     }
   };
 
