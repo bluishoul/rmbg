@@ -9,6 +9,14 @@ A desktop application for removing image backgrounds using [Gitee AI Serverless 
 - Real-time preview
 - Dark mode support
 - Save to downloads folder
+- Using local model on Apple Silicon by default, api for backup.
+
+# Screenshots
+
+| Batch     | Local Model Support | API Support |
+|    :----:  |    :----:  |    :----:  |
+| ![Batch](./docs/screenshots/batch.png)     | ![Local Model Support](./docs/screenshots/local-model.png)      | ![API Support](./docs/screenshots/api.png)      |
+
 
 ## Tech Stack
 

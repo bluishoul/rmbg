@@ -4,11 +4,18 @@
 
 ## 功能特性
 
-- 仅支持选择目录
+- 仅支持图片和目录
 - 批量背景移除
 - 实时预览
 - 支持深色模式
 - 保存到下载文件夹
+- macOS 下支持 Apple Silicon 芯片使用本地模型扣图，其他设备支持支持 API 扣图
+
+# 截图
+
+| 批量扣图     | 本地模型扣图 | API 扣图 |
+|    :----:  |    :----:  |    :----:  |
+| ![批量扣图](./docs/screenshots/batch.png)     | ![本地模型](./docs/screenshots/local-model.png)      | ![API 扣图](./docs/screenshots/api.png)      |
 
 ## 技术栈
 
