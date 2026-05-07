@@ -58,4 +58,16 @@ The `.dmg` and `.app` will be generated in `src-tauri/target/release/bundle/`.
 
 ## License
 
-MIT License
+### Project License
+This project is licensed under the **MIT License** - see the LICENSE file for details.
+
+### Model License ⚠️
+The **RMBG-2.0 model** is licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/deed.en) (Creative Commons Attribution-NonCommercial 4.0 International).
+
+**This means:**
+- ✅ **Allowed**: Personal use, academic research, non-commercial projects
+- ❌ **Not Allowed**: Commercial use, selling as a service, using in commercial products
+
+**For commercial applications**, please:
+1. Contact [BRIA AI](https://www.bria.ai/) to inquire about commercial licensing
+2. Or consider using alternative background removal models with permissive licenses (e.g., MIT, Apache 2.0)
